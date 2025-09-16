@@ -85,7 +85,7 @@ social-media-ad-generator/
 - **Backend**: FastAPI, asyncio
 - **Frontend**: HTML5, CSS3, JavaScript
 - **Image Processing**: PIL/Pillow
-- **Data Validation**: Pydantic v2
+- **Data Validation**: Pydantic v2.10+
 
 ## 📋 API Endpoints
 
