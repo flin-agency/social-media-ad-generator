@@ -3,31 +3,42 @@
 import asyncio
 import logging
 import uuid
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional, cast
 from datetime import datetime
 
 # Note: google-adk might not be available yet, so we'll create a mock structure
 # that can be easily replaced when the actual ADK becomes available
 
 from .models import (
-    ImageAnalysis, AdGenerationRequest, AdGenerationResult,
-    UserResponse, ProductCategory, BrandTone
+    AdGenerationRequest,
+    AdGenerationResult,
+    BrandTone,
+    ImageAnalysis,
+    ProductCategory,
+    UserResponse,
 )
-from .tools.image_analyzer import ImageAnalyzer
-from .tools.question_engine import QuestionEngine
-from .tools.ad_generator import AdGenerator
+from .tools import (
+    AdGenerator,
+    ImageAnalyzer,
+    QuestionEngine,
+    ToolManager,
+    ToolSpec,
+    ToolOutput,
+)
 from .config import config
 
 
 class SocialMediaAdAgent:
     """Main agent class for generating social media ads."""
 
-    def __init__(self):
+    def __init__(self, tool_manager: Optional[ToolManager] = None):
         """Initialize the agent with tools."""
+
         self.logger = logging.getLogger(__name__)
-        self.image_analyzer = ImageAnalyzer()
-        self.question_engine = QuestionEngine()
-        self.ad_generator = AdGenerator()
+        self.tool_manager = tool_manager or ToolManager.default()
+        self.image_analyzer = cast(ImageAnalyzer, self.tool_manager.get("image_analyzer"))
+        self.question_engine = cast(QuestionEngine, self.tool_manager.get("question_engine"))
+        self.ad_generator = cast(AdGenerator, self.tool_manager.get("ad_generator"))
         self.sessions: Dict[str, Dict[str, Any]] = {}
 
     async def start_session(self, session_id: str = None) -> str:
@@ -195,6 +206,16 @@ class SocialMediaAdAgent:
             "responses_count": len(session["responses"]),
             "generation_complete": session["generation_result"] is not None
         }
+
+    def get_tool_specs(self) -> List[ToolSpec]:
+        """Expose tool specifications for external agent frameworks."""
+
+        return self.tool_manager.specs()
+
+    async def invoke_tool(self, tool_name: str, **kwargs: Any) -> ToolOutput:
+        """Invoke a registered tool directly via the tool manager."""
+
+        return await self.tool_manager.ainvoke(tool_name, **kwargs)
 
     def cleanup_session(self, session_id: str) -> bool:
         """Clean up session data."""

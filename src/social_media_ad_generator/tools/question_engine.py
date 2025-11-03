@@ -1,23 +1,88 @@
 """Question generation and response processing engine."""
 
-import asyncio
-import logging
+from __future__ import annotations
+
 import re
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from ..models import ImageAnalysis, ProductCategory, BrandTone, QuestionTemplate, UserResponse
+from pydantic import Field
+
+from ..models import (
+    BrandTone,
+    ImageAnalysis,
+    ProductCategory,
+    QuestionTemplate,
+    UserResponse,
+)
 from ..prompts.question_templates import get_questions_for_category
+from .base import AgentTool, ToolInput, ToolOutput
 
 
-class QuestionEngine:
+class QuestionEngineInput(ToolInput):
+    """Input payload for the question engine."""
+
+    operation: str = Field(
+        default="generate_questions",
+        description="Action to perform: generate_questions or process_response",
+    )
+    analysis: Optional[ImageAnalysis] = None
+    num_questions: int = 3
+    response: Optional[UserResponse] = None
+
+
+class QuestionEngineOutput(ToolOutput):
+    """Output payload returned by the question engine."""
+
+    questions: Optional[List[QuestionTemplate]] = None
+    processed_response: Optional[Dict[str, Any]] = None
+
+
+class QuestionEngine(AgentTool):
     """Engine for generating contextual questions and processing responses."""
 
-    def __init__(self):
-        """Initialize the question engine."""
-        self.logger = logging.getLogger(__name__)
+    name = "question_engine"
+    description = "Crafts follow-up questions and structures user responses."
+    args_model = QuestionEngineInput
+    return_model = QuestionEngineOutput
+
+    def __init__(self) -> None:
+        super().__init__()
 
     async def generate_questions(self, analysis: ImageAnalysis, num_questions: int = 3) -> List[QuestionTemplate]:
         """Generate contextual questions based on image analysis."""
+
+        result = await self.ainvoke(analysis=analysis, num_questions=num_questions, operation="generate_questions")
+        return result.questions or []
+
+    async def process_response(self, response: UserResponse) -> Dict[str, Any]:
+        """Process and extract structured information from user response."""
+
+        result = await self.ainvoke(response=response, operation="process_response")
+        return result.processed_response or {}
+
+    async def _arun(self, params: QuestionEngineInput) -> QuestionEngineOutput:
+        """Dispatch the correct operation based on the provided parameters."""
+
+        operation = params.operation
+        if operation == "generate_questions":
+            if not params.analysis:
+                raise ValueError("analysis is required to generate questions")
+            questions = await self._generate_questions_internal(params.analysis, params.num_questions)
+            return QuestionEngineOutput(questions=questions)
+
+        if operation == "process_response":
+            if not params.response:
+                raise ValueError("response is required to process answers")
+            processed = await self._process_response_internal(params.response)
+            return QuestionEngineOutput(processed_response=processed)
+
+        raise ValueError(f"Unsupported question engine operation: {operation}")
+
+    async def _generate_questions_internal(
+        self, analysis: ImageAnalysis, num_questions: int = 3
+    ) -> List[QuestionTemplate]:
+        """Generate contextual questions based on image analysis."""
+
         self.logger.info(f"Generating {num_questions} questions for category: {analysis.category}")
 
         # Get questions appropriate for the product category
@@ -27,20 +92,23 @@ class QuestionEngine:
         if analysis.suggested_questions and len(questions) < num_questions:
             remaining_slots = num_questions - len(questions)
             for i, suggested in enumerate(analysis.suggested_questions[:remaining_slots]):
-                questions.append(QuestionTemplate(
-                    question_id=f"suggested_{i+1}",
-                    template=suggested,
-                    category_specific=[analysis.category]
-                ))
+                questions.append(
+                    QuestionTemplate(
+                        question_id=f"suggested_{i+1}",
+                        template=suggested,
+                        category_specific=[analysis.category],
+                    )
+                )
 
         self.logger.info(f"Generated {len(questions)} questions")
         return questions[:num_questions]
 
-    async def process_response(self, response: UserResponse) -> Dict[str, Any]:
+    async def _process_response_internal(self, response: UserResponse) -> Dict[str, Any]:
         """Process and extract structured information from user response."""
+
         self.logger.info(f"Processing response for question: {response.question_id}")
 
-        processed_data = {}
+        processed_data: Dict[str, Any] = {}
         response_text = response.response.lower().strip()
 
         # Process based on question type
