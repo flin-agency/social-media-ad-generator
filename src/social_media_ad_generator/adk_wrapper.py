@@ -23,6 +23,8 @@ class SocialMediaAdAgentWrapper:
         """Initialize the agent for ADK."""
         self.logger.info("Initializing Social Media Ad Generator Agent for ADK")
 
+        tool_specs = [spec.to_dict() for spec in self.agent.get_tool_specs()]
+
         return {
             "status": "ready",
             "capabilities": [
@@ -36,7 +38,8 @@ class SocialMediaAdAgentWrapper:
                 "beauty_personal_care", "home_garden", "sports_outdoors",
                 "automotive", "books_media", "toys_games", "services"
             ],
-            "output_formats": ["9:16 vertical ads for Instagram/TikTok Stories"]
+            "output_formats": ["9:16 vertical ads for Instagram/TikTok Stories"],
+            "tools": tool_specs,
         }
 
     async def process_image(self, image_path: str) -> Dict[str, Any]:

@@ -1,27 +1,60 @@
 """Image analysis tool for product categorization and feature extraction."""
 
-import asyncio
-import logging
-from typing import List, Dict, Any
-from PIL import Image
-import os
-import colorsys
+from __future__ import annotations
+
 from collections import Counter
+from typing import Any, Dict, List
 
-from ..models import ImageAnalysis, ProductCategory
+import colorsys
+import os
+from PIL import Image
+from pydantic import Field
+
 from ..config import config
+from ..models import ImageAnalysis, ProductCategory
+from .base import AgentTool, ToolInput, ToolOutput
 
 
-class ImageAnalyzer:
+class ImageAnalyzerInput(ToolInput):
+    """Inputs required for image analysis."""
+
+    image_path: str
+
+
+class ImageAnalyzerOutput(ToolOutput):
+    """Structured output for image analysis."""
+
+    analysis: ImageAnalysis
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ImageAnalyzer(AgentTool):
     """Tool for analyzing product images."""
 
-    def __init__(self):
-        """Initialize the image analyzer."""
-        self.logger = logging.getLogger(__name__)
+    name = "image_analyzer"
+    description = "Analyze uploaded product imagery to extract marketing insights."
+    args_model = ImageAnalyzerInput
+    return_model = ImageAnalyzerOutput
+
+    def __init__(self) -> None:
+        super().__init__()
 
     async def analyze_image(self, image_path: str) -> ImageAnalysis:
         """Analyze a product image and extract features."""
-        self.logger.info(f"Analyzing image: {image_path}")
+
+        result = await self.ainvoke(image_path=image_path)
+        return result.analysis
+
+    async def _arun(self, params: ImageAnalyzerInput) -> ImageAnalyzerOutput:
+        """Execute analysis with validated parameters."""
+
+        self.logger.info(f"Analyzing image: {params.image_path}")
+        analysis = await self._perform_analysis(params.image_path)
+        self.logger.info(f"Image analysis completed for {params.image_path}")
+        return ImageAnalyzerOutput(analysis=analysis, metadata={"source_path": params.image_path})
+
+    async def _perform_analysis(self, image_path: str) -> ImageAnalysis:
+        """Perform the actual analysis pipeline for the provided image."""
 
         # Validate image
         await self._validate_image(image_path)
@@ -39,17 +72,14 @@ class ImageAnalyzer:
         quality_score = await self._assess_image_quality(image)
         suggested_questions = await self._generate_suggested_questions(category, product_features)
 
-        analysis = ImageAnalysis(
+        return ImageAnalysis(
             category=category,
             dominant_colors=dominant_colors,
             product_features=product_features,
             background_type=background_type,
             image_quality_score=quality_score,
-            suggested_questions=suggested_questions
+            suggested_questions=suggested_questions,
         )
-
-        self.logger.info(f"Image analysis completed for {image_path}")
-        return analysis
 
     async def _validate_image(self, image_path: str) -> None:
         """Validate image file."""

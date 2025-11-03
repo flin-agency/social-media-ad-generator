@@ -1,33 +1,70 @@
 """Ad generation tool using Google Gemini API for text-to-image generation."""
 
+from __future__ import annotations
+
 import asyncio
-import logging
 import time
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, Literal, Optional
+
+import os
+
+import requests
 from google import genai
 from google.genai import types
 from PIL import Image
-import requests
-from io import BytesIO
-import os
+from pydantic import Field
 
+from ..config import config
 from ..models import (
-    AdGenerationRequest, AdGenerationResult, GeneratedAd,
-    AdVariationType, BrandTone, ProductCategory
+    AdGenerationRequest,
+    AdGenerationResult,
+    AdVariationType,
+    GeneratedAd,
 )
 from ..prompts.ad_generation_prompts import (
-    generate_ad_prompt, get_quality_enhancement_suffix, enhance_prompt_with_colors
+    enhance_prompt_with_colors,
+    generate_ad_prompt,
+    get_quality_enhancement_suffix,
 )
-from ..config import config
+from .base import AgentTool, ToolInput, ToolOutput
 
 
-class AdGenerator:
+class AdGeneratorInput(ToolInput):
+    """Input payload for the ad generator tool."""
+
+    operation: Literal["generate_ads", "validate_image", "download_image"] = Field(
+        default="generate_ads",
+        description="Action the tool should execute.",
+    )
+    request: Optional[AdGenerationRequest] = None
+    image_url: Optional[str] = None
+    image_path: Optional[str] = None
+    request_id: Optional[str] = None
+    index: int = 0
+
+
+class AdGeneratorOutput(ToolOutput):
+    """Output payload returned by the ad generator tool."""
+
+    generation: Optional[AdGenerationResult] = None
+    validation: Optional[Dict[str, Any]] = None
+    saved_path: Optional[str] = Field(
+        default=None,
+        description="Local path where the image was saved.",
+    )
+
+
+class AdGenerator(AgentTool):
     """Tool for generating social media ads using Gemini API."""
 
-    def __init__(self):
-        """Initialize the ad generator."""
-        self.logger = logging.getLogger(__name__)
+    name = "ad_generator"
+    description = "Creates polished ad creatives from analysis insights and brand data."
+    args_model = AdGeneratorInput
+    return_model = AdGeneratorOutput
+
+    def __init__(self) -> None:
+        super().__init__()
         self._configure_gemini()
 
     def _configure_gemini(self):
@@ -49,7 +86,45 @@ class AdGenerator:
 
     async def generate_ads(self, request: AdGenerationRequest) -> AdGenerationResult:
         """Generate 4 ad variations based on the request."""
-        self.logger.info(f"Starting ad generation for request")
+
+        result = await self.ainvoke(request=request, operation="generate_ads")
+        if not result.generation:
+            raise ValueError("Ad generation failed to produce a result")
+        return result.generation
+
+    async def _arun(self, params: AdGeneratorInput) -> AdGeneratorOutput:
+        """Dispatch operations supported by the ad generator tool."""
+
+        operation = params.operation
+
+        if operation == "generate_ads":
+            if not params.request:
+                raise ValueError("request is required for ad generation")
+            generation = await self._generate_ads_internal(params.request)
+            return AdGeneratorOutput(generation=generation)
+
+        if operation == "validate_image":
+            if not params.image_path:
+                raise ValueError("image_path is required for validation")
+            validation = self.validate_generated_image(params.image_path)
+            return AdGeneratorOutput(validation=validation)
+
+        if operation == "download_image":
+            if not params.image_url or not params.request_id:
+                raise ValueError("image_url and request_id are required to download an image")
+            saved_path = await self.download_and_save_image(
+                params.image_url,
+                params.request_id,
+                params.index,
+            )
+            return AdGeneratorOutput(saved_path=saved_path)
+
+        raise ValueError(f"Unsupported ad generator operation: {operation}")
+
+    async def _generate_ads_internal(self, request: AdGenerationRequest) -> AdGenerationResult:
+        """Internal implementation for generating ad variations."""
+
+        self.logger.info("Starting ad generation for request")
         start_time = time.time()
 
         request_id = str(uuid.uuid4())
@@ -60,7 +135,7 @@ class AdGenerator:
             AdVariationType.LIFESTYLE,
             AdVariationType.PRODUCT_HERO,
             AdVariationType.BENEFIT_FOCUSED,
-            AdVariationType.SOCIAL_PROOF
+            AdVariationType.SOCIAL_PROOF,
         ]
 
         try:
@@ -96,7 +171,7 @@ class AdGenerator:
                 ads=generated_ads,
                 total_generation_time_seconds=total_time,
                 success=len(generated_ads) > 0,
-                error_message=None if len(generated_ads) > 0 else "Failed to generate any ads"
+                error_message=None if len(generated_ads) > 0 else "Failed to generate any ads",
             )
 
             self.logger.info(f"Ad generation completed: {len(generated_ads)} ads in {total_time:.1f}s")
@@ -111,7 +186,7 @@ class AdGenerator:
                 ads=[],
                 total_generation_time_seconds=total_time,
                 success=False,
-                error_message=str(e)
+                error_message=str(e),
             )
 
     async def _generate_single_ad(
@@ -184,7 +259,6 @@ class AdGenerator:
                     image_data = f.read()
 
                 # Add the image to contents
-                from google.genai import types
                 image_part = types.Part.from_bytes(
                     data=image_data,
                     mime_type="image/jpeg" if product_image_path.lower().endswith(('.jpg', '.jpeg')) else "image/png"
